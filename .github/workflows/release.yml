@@ -1,0 +1,111 @@
+name: Release
+
+# Actions → Release → Run workflow → バージョン（例: 1.0.0）を入力して実行する。
+# ※ workflow_dispatch のワークフローは、既定ブランチ（main）にこのファイルがあるときだけ一覧に出る。
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'バージョン（x.y.z 形式。例: 1.0.0）'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      # 入力値はスクリプトに直接埋め込まず、環境変数経由で使う（インジェクション対策）
+      VERSION: ${{ inputs.version }}
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+    steps:
+      - name: Validate version format
+        run: |
+          # -cmatch と [0-9] で、全角数字などを弾く
+          if ($env:VERSION -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
+            Write-Error "version は x.y.z 形式で入力してください（例: 1.0.0）。入力値: '$env:VERSION'"
+            exit 1
+          }
+          "TAG=v$env:VERSION" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fail if tag already exists
+        run: |
+          git fetch --tags --force --quiet
+          $local = git tag --list $env:TAG
+          $remote = git ls-remote --tags origin "refs/tags/$env:TAG"
+          if ($local -or $remote) {
+            Write-Error "タグ $env:TAG は既に存在します。別のバージョンを指定してください。"
+            exit 1
+          }
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build & test
+        run: |
+          dotnet restore ProjectLauncher.sln
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet build ProjectLauncher.sln -c Release --no-restore -p:Version=$env:VERSION
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet test ProjectLauncher.sln -c Release --no-build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Publish single exe
+        run: >
+          dotnet publish src/ProjectLauncher.App/ProjectLauncher.App.csproj
+          -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None
+          -p:Version=$env:VERSION
+          -o publish
+
+      - name: Package
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $exe = "dist/ProjectLauncher-$env:TAG-win-x64.exe"
+          Copy-Item publish/ProjectLauncher.exe $exe
+          $fileVersion = (Get-Item $exe).VersionInfo.FileVersion
+          if ($fileVersion -ne "$env:VERSION.0") {
+            Write-Error "exe のバージョン ($fileVersion) が入力値 ($env:VERSION) と一致しません"
+            exit 1
+          }
+          Compress-Archive -Path publish/ProjectLauncher.exe, README.md -DestinationPath "dist/ProjectLauncher-$env:TAG-win-x64.zip"
+          Get-ChildItem dist | Format-Table Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
+          (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower() + "  " + (Split-Path $exe -Leaf) | Out-File dist/SHA256SUMS.txt -Encoding ascii
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a $env:TAG -m "Release $env:TAG" $env:GITHUB_SHA
+          git push origin $env:TAG
+          "TAG_PUSHED=true" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:TAG `
+            (Get-ChildItem dist/*).FullName `
+            --title "ProjectLauncher $env:TAG" `
+            --generate-notes `
+            --verify-tag
+
+      # Release 作成に失敗したらタグを消しておく（同じバージョンで再実行できるように）
+      - name: Roll back tag on failure
+        if: failure() && env.TAG_PUSHED == 'true'
+        run: git push origin --delete $env:TAG
