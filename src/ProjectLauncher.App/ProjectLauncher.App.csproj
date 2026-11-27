@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <!-- Linux / スマホ側の CI でもコンパイルだけはできるようにする（実行は Windows のみ） -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AssemblyName>ProjectLauncher</AssemblyName>
+    <RootNamespace>ProjectLauncher.App</RootNamespace>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationVisualStyles>true</ApplicationVisualStyles>
+    <ApplicationUseCompatibleTextRendering>false</ApplicationUseCompatibleTextRendering>
+    <ApplicationDefaultFont>Yu Gothic UI, 9pt</ApplicationDefaultFont>
+
+    <!-- 軽量化：常駐アプリなのでバックグラウンドGCスレッドは不要。ワークステーションGC（既定）のまま -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+    <!-- 同梱する衛星リソースを日本語と英語だけにして exe を小さくする -->
+    <SatelliteResourceLanguages>ja;en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\app.ico" LogicalName="ProjectLauncher.app.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ProjectLauncher.Core\ProjectLauncher.Core.csproj" />
+  </ItemGroup>
+
+</Project>
